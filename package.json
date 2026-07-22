@@ -1,0 +1,12 @@
+{
+  "name": "battle-game",
+  "version": "1.0.0",
+  "description": "双人格斗对战游戏 - 在线匹配 + 实时对战",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
