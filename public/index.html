@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>双人格斗对战</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0a0a0a;
+  color: #fff;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  overflow: hidden;
+}
+#app {
+  width: 820px;
+  text-align: center;
+}
+
+/* --- 主菜单 --- */
+#menu {
+  padding: 40px;
+}
+#menu h1 {
+  font-size: 48px;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, #f093fb, #f5576c, #fda085);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 4px;
+}
+#menu .subtitle {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 40px;
+}
+
+.btn {
+  display: inline-block;
+  padding: 14px 40px;
+  border: none;
+  border-radius: 12px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all .2s;
+  font-weight: bold;
+}
+.btn-primary {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+}
+.btn-primary:hover { transform: scale(1.05); box-shadow: 0 4px 20px rgba(102,126,234,.5); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-danger {
+  background: linear-gradient(135deg, #f5576c, #f093fb);
+  color: #fff;
+}
+
+#searching {
+  margin-top: 20px;
+  font-size: 16px;
+  color: #aaa;
+}
+.pulse { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+.spinner {
+  display: inline-block;
+  width: 20px; height: 20px;
+  border: 3px solid #333;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- 游戏画面 --- */
+#game-view { display: none; position: relative; }
+canvas {
+  display: block;
+  border: 2px solid #222;
+  border-radius: 8px;
+  background: #111;
+}
+#hud {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  font-size: 14px;
+  color: #888;
+}
+#hud .key-hint {
+  background: #1a1a1a;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #333;
+  font-size: 12px;
+}
+
+/* --- 结束弹窗 --- */
+#result-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.75);
+  z-index: 10;
+  justify-content: center;
+  align-items: center;
+}
+#result-overlay.show { display: flex; }
+#result-box {
+  background: #1a1a1a;
+  border: 2px solid #333;
+  border-radius: 16px;
+  padding: 40px 50px;
+  text-align: center;
+}
+#result-box h2 {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+#result-box .score-text {
+  font-size: 14px;
+  color: #888;
+  margin-bottom: 24px;
+}
+#result-box .win { color: #4ade80; }
+#result-box .lose { color: #f87171; }
+
+.control-row { display: flex; gap: 12px; justify-content: center; margin-bottom: 20px; }
+.control-row .btn { font-size: 14px; padding: 10px 28px; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- 主菜单 -->
+  <div id="menu">
+    <h1>⚔️ 双人格斗</h1>
+    <p class="subtitle">在线匹配 · 实时对战</p>
+    <button id="btn-match" class="btn btn-primary" onclick="startMatch()">⚡ 开始匹配</button>
+    <div id="searching" style="display:none;">
+      <span class="spinner"></span><span class="pulse">寻找对手中...</span>
+      <br>
+      <button style="margin-top:16px;" class="btn btn-danger" onclick="cancelMatch()">取消匹配</button>
+    </div>
+  </div>
+
+  <!-- 游戏画面 -->
+  <div id="game-view">
+    <div id="hud">
+      <span>P1: <b style="color:#4ade80;">⬅ ➡ ⬆ [F] 攻击</b></span>
+      <span id="hud-status" style="color:#facc15;">对战中</span>
+      <span id="hud-opponent">对手: ---</span>
+    </div>
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+  </div>
+
+  <!-- 结束弹窗 -->
+  <div id="result-overlay">
+    <div id="result-box">
+      <h2 id="result-title"></h2>
+      <p class="score-text" id="result-score"></p>
+      <div class="control-row">
+        <button class="btn btn-primary" onclick="rematch()">🔄 再来一局</button>
+        <button class="btn btn-danger" onclick="backToMenu()">🏠 返回菜单</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== 网络连接 ====================
+const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
+const ws = new WebSocket(protocol + location.host);
+let playerId = null;
+let playerNum = null;
+let roomId = null;
+let gameState = null;
+let keys = {};
+let canvas, ctx;
+let animFrame;
+let attackTimeout = null;
+
+ws.onopen = () => console.log('✅ WebSocket 已连接');
+ws.onerror = (e) => console.error('❌ WebSocket 错误', e);
+ws.onclose = () => {
+  console.log('🔌 连接断开');
+  showMenu();
+};
+
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  switch (msg.type) {
+    case 'connected':
+      playerId = msg.playerId;
+      break;
+    case 'match_found':
+      roomId = msg.roomId;
+      playerNum = msg.playerNum;
+      gameState = msg.gameState;
+      console.log('🎮 匹配成功!', '你是 P' + playerNum, '对手:', msg.opponentId);
+      showGame();
+      break;
+    case 'game_update':
+      gameState = msg.gameState;
+      break;
+    case 'game_over':
+      showResult(msg);
+      break;
+    case 'opponent_disconnected':
+      gameState.gameOver = true;
+      showResult({ winner: '你（对手掉线）', scores: { p1: '?', p2: '?' } });
+      break;
+    case 'opponent_left':
+      backToMenu();
+      break;
+    case 'queue_status':
+      if (msg.status === 'searching') showSearching();
+      else showMenu();
+      break;
+  }
+};
+
+// ==================== UI 切换 ====================
+function showMenu() {
+  document.getElementById('menu').style.display = 'block';
+  document.getElementById('searching').style.display = 'none';
+  document.getElementById('game-view').style.display = 'none';
+  document.getElementById('result-overlay').classList.remove('show');
+  document.getElementById('btn-match').disabled = false;
+  if (animFrame) cancelAnimationFrame(animFrame);
+}
+
+function showSearching() {
+  document.getElementById('menu').style.display = 'block';
+  document.getElementById('btn-match').style.display = 'none';
+  document.getElementById('searching').style.display = 'block';
+}
+
+function showGame() {
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('game-view').style.display = 'block';
+  document.getElementById('result-overlay').classList.remove('show');
+  document.getElementById('hud-opponent').textContent = 
+    '你是 P' + playerNum + (playerNum === 1 ? ' (左)' : ' (右)');
+  startGameLoop();
+}
+
+function showResult(msg) {
+  const isWin = msg.winner.includes('你');
+  document.getElementById('result-title').textContent = isWin ? '🎉 你赢了!' : '💀 你输了';
+  document.getElementById('result-title').className = isWin ? 'win' : 'lose';
+  document.getElementById('result-score').textContent = 
+    msg.winner + (msg.scores ? ` | P1: ${msg.scores.p1} P2: ${msg.scores.p2}` : '');
+  document.getElementById('result-overlay').classList.add('show');
+  if (animFrame) cancelAnimationFrame(animFrame);
+  // 最后画一帧
+  if (gameState) drawFrame();
+}
+
+// ==================== 匹配操作 ====================
+function startMatch() {
+  document.getElementById('btn-match').disabled = true;
+  send({ type: 'join_queue' });
+}
+
+function cancelMatch() {
+  send({ type: 'leave_queue' });
+  showMenu();
+}
+
+function rematch() {
+  send({ type: 'rematch' });
+  document.getElementById('result-overlay').classList.remove('show');
+  document.getElementById('game-view').style.display = 'none';
+  showSearching();
+}
+
+function backToMenu() {
+  cancelMatch();
+  if (roomId) {
+    // 离开房间
+    send({ type: 'leave_queue' });
+  }
+  roomId = null;
+  playerNum = null;
+  gameState = null;
+  showMenu();
+}
+
+function send(data) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(data));
+}
+
+// ==================== 键盘输入 ====================
+// P1: 方向键 + F攻击   P2: WASD + G攻击
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+
+  if (playerNum === 1) {
+    if (e.key === 'ArrowLeft')  keys.left = true;
+    if (e.key === 'ArrowRight') keys.right = true;
+    if (e.key === 'ArrowUp')    keys.jump = true;
+    if (e.key === 'f' || e.key === 'F') triggerAttack();
+  } else if (playerNum === 2) {
+    if (e.key === 'a' || e.key === 'A') keys.left = true;
+    if (e.key === 'd' || e.key === 'D') keys.right = true;
+    if (e.key === 'w' || e.key === 'W') keys.jump = true;
+    if (e.key === 'g' || e.key === 'G') triggerAttack();
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  if (playerNum === 1) {
+    if (e.key === 'ArrowLeft')  keys.left = false;
+    if (e.key === 'ArrowRight') keys.right = false;
+    if (e.key === 'ArrowUp')    keys.jump = false;
+  } else if (playerNum === 2) {
+    if (e.key === 'a' || e.key === 'A') keys.left = false;
+    if (e.key === 'd' || e.key === 'D') keys.right = false;
+    if (e.key === 'w' || e.key === 'W') keys.jump = false;
+  }
+});
+
+function triggerAttack() {
+  if (attackTimeout) return;
+  attackTimeout = setTimeout(() => { attackTimeout = null; }, 400);
+  send({ type: 'game_input', action: 'attack', keys: { ...keys } });
+}
+
+// ==================== Canvas 渲染 ====================
+const GROUND_Y = 350;
+const PLAYER_W = 30;
+const PLAYER_H = 50;
+
+const COLORS = {
+  p1: { body: '#4ade80', dark: '#22c55e', light: '#86efac', name: 'P1', bg: 'rgba(74,222,128,.15)' },
+  p2: { body: '#f87171', dark: '#ef4444', light: '#fca5a5', name: 'P2', bg: 'rgba(248,113,113,.15)' },
+};
+
+function startGameLoop() {
+  function loop() {
+    if (!gameState || gameState.gameOver) return;
+    drawFrame();
+    // 持续发送移动输入
+    if (keys.left || keys.right || keys.jump) {
+      send({ type: 'game_input', keys: { ...keys } });
+    }
+    animFrame = requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+function drawFrame() {
+  if (!gameState) return;
+  canvas = document.getElementById('gameCanvas');
+  ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // --- 背景 ---
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, W, H);
+
+  // 网格
+  ctx.strokeStyle = 'rgba(255,255,255,.03)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+
+  // --- 地面 ---
+  ctx.fillStyle = '#16213e';
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, GROUND_Y); ctx.lineTo(W, GROUND_Y); ctx.stroke();
+
+  // --- 绘制两个玩家 ---
+  drawPlayer(gameState.players.p1, COLORS.p1);
+  drawPlayer(gameState.players.p2, COLORS.p2);
+
+  // --- 血条 ---
+  drawHealthBar(20, 20, gameState.players.p1.health, COLORS.p1);
+  drawHealthBar(W - 220, 20, gameState.players.p2.health, COLORS.p2);
+
+  // --- 比分 ---
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 24px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${gameState.scores.p1} - ${gameState.scores.p2}`, W / 2, 35);
+  ctx.textAlign = 'start';
+
+  // --- 操作提示 ---
+  ctx.fillStyle = 'rgba(255,255,255,.3)';
+  ctx.font = '11px monospace';
+  ctx.fillText('⬅➡⬆ F', 25, GROUND_Y + 25);
+  ctx.textAlign = 'end';
+  ctx.fillText('WASD G', W - 25, GROUND_Y + 25);
+  ctx.textAlign = 'start';
+}
+
+function drawPlayer(p, color) {
+  if (!p) return;
+  const x = p.x, y = p.y;
+  const facingRight = p.facingRight;
+
+  ctx.save();
+
+  // 阴影
+  ctx.fillStyle = 'rgba(0,0,0,.3)';
+  ctx.fillRect(x + 2, y - 2, PLAYER_W, PLAYER_H);
+
+  // 身体
+  ctx.fillStyle = p.health <= 0 ? '#555' : color.body;
+  ctx.fillRect(x, y, PLAYER_W, PLAYER_H);
+
+  // 头
+  const headR = PLAYER_W / 2 + 2;
+  ctx.fillStyle = p.health <= 0 ? '#555' : color.light;
+  ctx.beginPath();
+  ctx.arc(x + PLAYER_W / 2, y - headR + 5, headR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 眼睛
+  ctx.fillStyle = '#fff';
+  const eyeX = facingRight ? x + PLAYER_W / 2 + 4 : x + PLAYER_W / 2 - 4;
+  ctx.beginPath();
+  ctx.arc(eyeX, y - 4, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.arc(eyeX + (facingRight ? 1 : -1), y - 4, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 攻击特效
+  if (p.attacking) {
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 3;
+    const slashX = facingRight ? x + PLAYER_W + 5 : x - 5;
+    ctx.beginPath();
+    ctx.moveTo(slashX, y);
+    ctx.lineTo(slashX + (facingRight ? 25 : -25), y + PLAYER_H / 2);
+    ctx.stroke();
+
+    // 冲击波
+    ctx.strokeStyle = 'rgba(250,204,21,.3)';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(x + PLAYER_W / 2, y + PLAYER_H / 2, 40, 
+      facingRight ? -0.5 : Math.PI - 0.5, 
+      facingRight ? 0.5 : Math.PI + 0.5);
+    ctx.stroke();
+  }
+
+  // 受伤闪烁
+  if (p.health <= 0) {
+    ctx.fillStyle = 'rgba(255,0,0,.2)';
+    ctx.fillRect(x - 5, y - 10, PLAYER_W + 10, PLAYER_H + 15);
+  }
+
+  ctx.restore();
+}
+
+function drawHealthBar(x, y, health, color) {
+  const bw = 200, bh = 16;
+  // 背景
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x, y, bw, bh);
+  // 血量
+  const ratio = Math.max(0, health / 100);
+  const grad = ctx.createLinearGradient(x, 0, x + bw, 0);
+  grad.addColorStop(0, color.dark);
+  grad.addColorStop(1, color.body);
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, bw * ratio, bh);
+  // 边框
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, bw, bh);
+  // 文字
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(color.name, x + bw / 2, y + bh - 4);
+  ctx.textAlign = 'start';
+}
+
+// ==================== 初始化 ====================
+showMenu();
+</script>
+</body>
+</html>
